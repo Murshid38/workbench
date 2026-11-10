@@ -1,0 +1,23 @@
+You don’t need another book to learn what signals and threads are. TLPI explains them from scratch: it assumes you know C, not that you already know systems programming.
+
+Signals: chapter 20 opens with what a signal is, who sends it and the default actions. It then builds up to dispositions, masks, pending signals and why standard signals don’t queue. Chapters 21–22 cover writing handlers safely, real-time signals, sigsuspend and signalfd.
+Threads: chapter 29 opens with what a thread is compared with a process: which attributes the threads in a process share, which each one has to itself, and why you’d want threads. Chapters 30–33 build mutexes and condition variables, thread safety, cancellation, and how threads interact with signals, fork and exec.
+Background: chapters 2–3 give the overview everything else rests on (kernel, processes, system calls, file descriptors), so read those first.
+
+What TLPI explains is the contract: what each call does, the rules and the traps. It mostly doesn’t explain how the hardware and kernel deliver that contract. For example, it won’t tell you how a signal actually reaches a process, what a context switch does to registers, or what a page fault is at the CPU level. For your top-to-bottom goal, two books fill that layer and fit the rigorous style you want:
+
+CS:APP (Computer Systems: A Programmer’s Perspective, Bryant & O’Hallaron) is the best partner. Its chapter 8, “Exceptional Control Flow”, builds processes and signals up from hardware exceptions and interrupts on real x86-64. Chapter 9 does virtual memory and chapter 12 concurrency. It’s the hardware half of what TLPI shows from the API side.
+OSTEP (Operating Systems: Three Easy Pieces, Arpaci-Dusseau) explains why the kernel is designed this way: scheduling, virtual memory, and locks, condition variables and semaphores built from first principles. It’s free to read online.
+
+How this fits the workbench:
+
+Before milestone 2: read TLPI 20–22 together with CS:APP chapter 8.
+Before milestone 6: read TLPI 29–33 together with OSTEP’s concurrency chapters.
+
+Two books are for later, once the basics are solid:
+
+Butenhof’s Programming with POSIX Threads, if you want pthreads in depth.
+Love’s Linux Kernel Development, for kernel internals. Its latest edition is from 2010, so read it for the ideas rather than current code.
+
+
+packages fedora: libasan libubsan valgrind strace gdb dwarves perf
