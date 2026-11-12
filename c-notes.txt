@@ -1,0 +1,3 @@
+It’s a definition (it has a body { ... }) written with empty parentheses, which is the old K&R form. That triggers -Wold-style-definition.
+
+It’s also the function’s only declaration. There’s no earlier int main(void); in your file, so this line is the first and only place the compiler learns about main. Because of the empty parentheses, that declaration doesn’t specify parameter types, so it isn’t a prototype. That triggers -Wstrict-prototypes.

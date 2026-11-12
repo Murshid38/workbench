@@ -1,0 +1,385 @@
+M-g n / M-g p: jump to the next or previous error, warning or crash location in your source.
+C-u C-c C-c: asks for program arguments (what you’d type after the program name in a terminal).
+Typing input: if your program reads input, type it in the buffer and press RET. C-c C-d means “end of input”.
+Re-running: the buffer takes focus, so press C-x o to get back to your code before pressing C-c C-c again.
+
+Here's the whole setup from zero, in the order you'll actually use it. Every output below is real: I ran each example with exactly your config's flags, and only shortened the long file paths.
+
+## 1. What "building" a program means
+
+Your `hello.c` is just text. The computer can only run machine code. `gcc` turns one into the other in four stages, all inside the single `gcc …` command your config prints:
+
+1. **Preprocessor:** handles every line starting with `#`. `#include <stdio.h>` pastes in the contents of that header file; `#define` does text replacement. The result is one big C file (`C-c m e` shows it to you).
+2. **Compiler:** turns C into assembly, the CPU's instructions written as text (`C-c m a` shows it).
+3. **Assembler:** turns assembly into machine code.
+4. **Linker (`ld`):** joins your machine code with the libraries you use. `printf` isn't in your file; it lives in the C library. The result is the executable, `.build/hello.learn`.
+
+When a program ends, it hands the shell a number called the **exit code**. Your config prints it as `[exit N]`:
+
+| Exit code | Meaning |
+|---|---|
+| 0 | Success: `main` returned 0 |
+| 1–127 | The program reported failure (a sanitizer stopping it gives 1) |
+| above 128 | The kernel killed the program with a signal. 139 = 128 + 11 = SIGSEGV, a crash from touching memory you don't own. Your config spells it out: `[exit 139 = killed by SIGSEGV]` |
+
+## 2. Reading the output of `C-c C-c`
+
+From top to bottom, the `*compilation*` buffer shows:
+
+1. **The header line:** which folder it ran in.
+2. **The script:** the exact commands Emacs ran. You can paste them into a terminal to get the same result.
+3. **Compiler messages**, if any. `file.c:LINE:COLUMN: warning:` means "this works, but it looks wrong"; `error:` means no program was built.
+4. **The divider** `---------- ./.build/hello.learn ----------`, then your program's own output.
+5. **`[exit N]`**, then Emacs's note that it finished.
+
+Ways to work in it:
+- **`M-g n` / `M-g p`:** jump to the next or previous error, warning or crash location in your source.
+- **`C-u C-c C-c`:** asks for program arguments (what you'd type after the program name in a terminal).
+- **Typing input:** if your program reads input, type it in the buffer and press RET. `C-c C-d` means "end of input".
+- **Re-running:** the buffer takes focus, so press `C-x o` to get back to your code before pressing `C-c C-c` again.
+
+## 3. The flags, in plain words
+
+### The language rules: `-std=c89 -pedantic-errors`
+
+`-std=c89` means "compile the 1989 C standard". `-pedantic-errors` means "anything that isn't C89 is an error, not a quiet extension". Newer habits get stopped:
+
+```c
+int main(void)
+{
+    // count to three
+    printf("start\n");
+    int n = 3;
+    for (int i = 0; i < n; i++)
+```
+```
+rules.c:5:5: error: C++ style comments are not allowed in ISO C90
+rules.c:7:5: error: ISO C90 forbids mixed declarations and code
+rules.c:8:5: error: 'for' loop initial declarations are only allowed in C99 or C11 mode
+```
+
+C89's rules, as these errors show:
+- comments are `/* … */` only;
+- every variable is declared at the top of a `{ }` block, before any statement;
+- `for` loops use a variable declared earlier.
+
+### Warnings: the compiler reviewing your code
+
+```c
+int main()
+{
+    int total = 10;
+    double ratio = 2.5;
+    int scaled = ratio * total;
+    {
+        int total = 3;
+```
+```
+warn.c:3:5: warning: function declaration isn't a prototype [-Wstrict-prototypes]
+warn.c:3:5: warning: old-style function definition [-Wold-style-definition]
+warn.c:7:18: warning: conversion from 'double' to 'int' may change value [-Wfloat-conversion]
+warn.c:9:13: warning: declaration of 'total' shadows a previous local [-Wshadow]
+```
+
+The name in `[brackets]` is the flag that caught it. What each warning flag in your config is for:
+
+| Flag | Catches |
+|---|---|
+| `-Wall -Wextra` | The standard set: unused variables, missing `return`, suspicious comparisons, and more |
+| `-Wconversion -Wsign-conversion` | A value silently losing information: 25.0 becoming 25, or -1 becoming 4294967295 |
+| `-Wshadow` | A new variable hiding another with the same name, as with `total` above |
+| `-Wstrict-prototypes -Wold-style-definition` | `int f()`, which in C89 means "unknown arguments", so calls are never checked. Write `int f(void)` |
+| `-Wmissing-prototypes` | A function used in other files without a declaration in a header |
+| `-Wwrite-strings -Wcast-qual` | Code that could modify text like `"hello"`, which lives in read-only memory |
+| `-Wformat=2` | A `printf` format that doesn't match its arguments: `%d` given a `double` |
+| `-Wundef` | `#if SOMETHING` where `SOMETHING` was never defined (it quietly counts as 0) |
+| `-Wdouble-promotion` | A `float` silently widened to `double` |
+| `-Wnested-externs -Wredundant-decls -Wbad-function-cast` | Declarations in odd places, declared twice, or a function's result cast to an unrelated type |
+| `-Wjump-misses-init -Wlogical-op -Wduplicated-cond -Wduplicated-branches` (GCC only) | Copy-paste bugs: the same condition twice, identical `if`/`else` branches, `&&` where `\|\|` was meant |
+
+### The four warnings that are errors
+
+`-Werror=implicit -Werror=int-conversion -Werror=incompatible-pointer-types -Werror=return-type` turn the warnings that always end in a crash into errors. Here's why, with `strdup`, a common function that isn't part of C89:
+
+```c
+#include <stdio.h>
+#include <string.h>
+
+int main(void)
+{
+    char *copy = strdup("hello");
+    printf("%s\n", copy);
+    return 0;
+}
+```
+
+With only `-std=c89 -Wall` (roughly your old setup), this compiles with two warnings and then crashes: `Segmentation fault`, exit 139. When C89 sees a function it has no declaration for, it guesses that the function returns an `int`. On a 64-bit machine, a memory address (a pointer) is 64 bits and an `int` is 32, so the address gets cut in half, and `printf` reads from a nonsense address. Your config stops the build instead:
+
+```
+dup.c:6:18: error: implicit declaration of function 'strdup'; did you mean 'strcmp'?
+dup.c:6:18: error: initialization of 'char *' from 'int' makes pointer from integer without a cast
+```
+
+The fix is a line at the very top of the file that says "I'm also using POSIX functions (the Unix additions to C)":
+
+```c
+#define _POSIX_C_SOURCE 200809L
+```
+
+`C-c m f` shows which of these "feature" switches are on for a file.
+
+All your other warnings stay warnings, so broken code still builds and you can run it and watch it fail. That's how you learn.
+
+### The learning build (`C-c C-c`, `C-c C-b`)
+
+| Flag | What it does for you |
+|---|---|
+| `-g3` | Puts your source lines, variable names and even macros into the program, so tools can say "line 10" instead of a raw address |
+| `-O0` | No optimization: the program does exactly what each line says, in order. That's what you want when stepping through it in a debugger |
+| `-fno-omit-frame-pointer` | Keeps the chain that links each function call to its caller, so crash reports show the whole path (`main` called `out_of_bounds`, …) |
+| `-ftrivial-auto-var-init=pattern` | Fills uninitialized local variables with the bytes `0xFE`, so a forgotten variable behaves the same wrong way every run instead of randomly |
+| `-fsanitize=address` (ASan) | Checks every memory access: past the end of an array, after `free`, memory never freed |
+| `-fsanitize=undefined` (UBSan) | Checks arithmetic and other "undefined behaviour" rules: an `int` overflowing, shifting too far, a NULL pointer used |
+| `pointer-compare,pointer-subtract` | Catches `<` or `-` between pointers into different objects, which C forbids |
+| `float-divide-by-zero,float-cast-overflow` | Catches 1.0/0.0, and a huge `double` squeezed into an `int` |
+| `-fno-sanitize-recover=all` | Stop at the first problem. The first report is the real bug; later ones are usually its fallout |
+
+The `ASAN_OPTIONS`/`UBSAN_OPTIONS` part of the run line switches on extra checks at run time:
+- `detect_leaks`: report memory you never freed.
+- `detect_stack_use_after_return`: catch use of a dead function's local variables.
+- `detect_invalid_pointer_pairs`: the pointer comparison check.
+- `strict_string_checks`: string arguments must be properly terminated.
+- `print_stacktrace`: show the call chain for UBSan reports.
+
+## 4. The tools, one bug at a time
+
+Save this as `bugs.c`. It has three bugs, chosen by an argument:
+
+```c
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+static void out_of_bounds(void)
+{
+    int *scores = malloc(3 * sizeof *scores);   /* room for 3 ints: [0] [1] [2] */
+    int i;
+    for (i = 0; i <= 3; i++)                    /* <= writes scores[3] too */
+        scores[i] = i * 10;
+    free(scores);
+}
+
+static void overflow(int start)
+{
+    int big = start;
+    big = big + 1;                              /* INT_MAX + 1 does not fit */
+    printf("%d\n", big);
+}
+
+static void leak(void)
+{
+    char *name = malloc(32);
+    name[0] = 'A';                              /* never freed */
+}
+
+int main(int argc, char **argv)
+{
+    int which = argc > 1 ? atoi(argv[1]) : 0;
+    if (which == 1) out_of_bounds();
+    if (which == 2) overflow(INT_MAX);
+    if (which == 3) leak();
+    puts("done");
+    return 0;
+}
+```
+
+**`C-u C-c C-c`, argument `1`: AddressSanitizer**
+
+```
+ERROR: AddressSanitizer: heap-buffer-overflow on address 0x50200000001c ...
+    #0 ... in out_of_bounds .../bugs.c:10
+    #1 ... in main .../bugs.c:30
+0x50200000001c is located 0 bytes after 12-byte region [0x502000000010,0x50200000001c)
+allocated by thread T0 here:
+    #1 ... in out_of_bounds .../bugs.c:7
+```
+
+How to read it:
+- **First line:** the kind of bug. Heap-buffer-overflow means writing past the end of memory you got from `malloc`.
+- **`#0`:** where it happened (line 10). `#1` is who called that function (line 30).
+- **"0 bytes after 12-byte region":** you asked for 12 bytes (3 ints of 4 bytes) and wrote immediately after them.
+- **"allocated by":** where that memory came from (line 7).
+
+Press RET on any `#` line to jump there. Without ASan, this bug usually doesn't crash at all; it silently damages other data.
+
+**Argument `2`: UndefinedBehaviorSanitizer**
+
+```
+bugs.c:17:9: runtime error: signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'
+```
+
+In C, an `int` going past its maximum isn't "wrapping around"; it's undefined behaviour. The optimizer is allowed to assume it never happens, which can make code behave in impossible-looking ways. UBSan stops on the exact line.
+
+**Argument `3`: LeakSanitizer**
+
+```
+ERROR: LeakSanitizer: detected memory leaks
+Direct leak of 32 byte(s) in 1 object(s) allocated from:
+    #1 ... in leak .../bugs.c:23
+```
+
+The program finished, then LeakSanitizer reported memory that was allocated and never freed.
+
+**`C-c m v`: Valgrind, for values that were never set**
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+
+int main(int argc, char **argv)
+{
+    int count;                         /* only set when you pass an argument */
+    if (argc > 1) count = atoi(argv[1]);
+    if (count > 0) puts("positive");
+    else puts("not positive");
+    return 0;
+}
+```
+
+ASan can't see this bug. The learning build prints `not positive` every time, because the `0xFE` fill makes `count` a negative number. Valgrind runs a plain build and watches every value:
+
+```
+Conditional jump or move depends on uninitialised value(s)
+   at 0x10919C: main (.../uninit.c:8)
+ Uninitialised value was created by a stack allocation
+   at 0x109169: main (.../uninit.c:5)
+positive
+```
+
+It found the `if` that used garbage (line 8) and where the garbage came from (line 5). Note that the plain build printed `positive`: with no fill, the garbage happened to be positive this time. That randomness is exactly why the learning build uses the fill.
+
+**`C-c m c`: check, before you call anything done**
+
+This compiles with optimization on (`-O2`), which lets GCC see more, and runs GCC's static analyzer. The analyzer checks every path through your code without running it. On the program above, it catches what `-O0` missed:
+
+```
+uninit.c:8:8: warning: 'count' may be used uninitialized [-Wmaybe-uninitialized]
+```
+
+It also lists your biggest functions by how much stack memory they use.
+
+**`C-c m u`: the undefined-behaviour detector**
+
+This builds your program twice, unoptimized (`-O0`) and optimized (`-O2`), runs both and compares the output. Correct C gives the same output at any optimization level, so any difference means undefined behaviour somewhere. The Terminal Workbench document has a loop that printed 22 at `-O0` and never ended at `-O2`.
+
+**`C-c m g`: the debugger (gdb)**
+
+This opens gdb inside Emacs, with an arrow in your source showing the current line. Type commands in the gdb buffer:
+
+| Command | Does |
+|---|---|
+| `break overflow` | Stop when `overflow()` is called (`break bugs.c:17` stops at a line) |
+| `run 2` | Start the program, with argument 2 |
+| `next` / `step` | Run one line / go into the function on this line |
+| `print big` | Show a variable's value |
+| `bt` | Show the chain of calls that got here |
+| `up` | Look at the caller's variables |
+| `continue`, `quit` | Run on, or stop |
+
+A real session on `bugs.c`:
+
+```
+Breakpoint 1, overflow (start=2147483647) at bugs.c:16
+16	    int big = start;
+(gdb) print big
+$1 = 32767                 <- garbage: line 16 has not run yet
+(gdb) next
+17	    big = big + 1;
+(gdb) print big
+$2 = 2147483647            <- INT_MAX: the next line will overflow
+(gdb) bt
+#0  overflow (start=2147483647) at bugs.c:17
+#1  main (argc=2, argv=...) at bugs.c:31
+```
+
+The debugger always stops before the line runs. In the learning build, a sanitizer report also stops gdb right at the bug.
+
+**`C-c m a`: see what the CPU runs**
+
+For `int square(int x) { return x * x; }`, optimized:
+
+```
+square:
+	imul	edi, edi      # multiply x by itself (x arrives in register edi)
+	mov	eax, edi      # the result goes back in register eax
+	ret               # return to the caller
+```
+
+Three instructions. Registers are the CPU's own tiny variables. Press RET on a `# file.c:N:` comment line to jump to that line of your code.
+
+**`C-c m e` and `C-c m f`: what the preprocessor did**
+
+`C-c m e` shows your file after every `#include` and `#define` is expanded; your own code is at the very bottom. `C-c m f` lists the active feature switches. With no `#define` at the top, you'll see only `__STRICT_ANSI__`, meaning "pure C89, nothing extra", which is why `strdup` was hidden.
+
+**`C-c m l`: how your structs sit in memory (pahole)**
+
+```c
+struct Student { char grade; double average; char initial; int age; };
+```
+```
+char    grade;        /*  0  1 */
+/* XXX 7 bytes hole, try to pack */
+double  average;      /*  8  8 */
+char    initial;      /* 16  1 */
+/* XXX 3 bytes hole, try to pack */
+int     age;          /* 20  4 */
+/* size: 24, ... sum members: 14, holes: 2, sum holes: 10 */
+```
+
+The CPU wants a `double` to start at a multiple of 8 bytes, so the compiler inserts empty "holes". Ten of the 24 bytes are wasted. Order the fields from biggest to smallest (`double`, `int`, `char`, `char`) and the struct shrinks to 16 bytes.
+
+**`C-c m t`: what your program asks the kernel (strace)**
+
+Your program can't touch the screen, files or the network directly. It asks the kernel through system calls. For hello, the last lines are:
+
+```
+write(1<...>, "Hello, World\n", 13) = 13
+exit_group(0) = ?
+```
+
+All of `printf`'s work ends in one `write` to file descriptor 1 (standard output), and `return 0` becomes `exit_group(0)`. *The Linux Programming Interface* is the book about these calls.
+
+**`C-c m p`: what it costs (perf)** counts CPU cycles, instructions and cache misses for an optimized build. Use it once your programs do real work.
+
+**`C-c m r`: the release build** optimizes and adds protections:
+- stack canaries (guard values that detect overwritten stack memory);
+- address randomization;
+- read-only relocation tables.
+
+It also adds three "seatbelt" flags. They make some undefined behaviour defined, so a bug that slips through does less harm:
+- `-fwrapv` makes `int` overflow wrap around;
+- `-fno-strict-aliasing` lets pointers of different types point to the same memory without surprises;
+- `-fno-delete-null-pointer-checks` stops the optimizer deleting your NULL checks.
+
+The seatbelts would also hide bugs, which is why they're only here. Watch `bugs.c` with argument 2 in this build: instead of stopping, it prints `-2147483648`. That's the bug UBSan caught, now silently "working".
+
+## 5. Your daily workflow
+
+1. **Write a little, press `C-c C-c`.** Fix the first error first: later errors are often caused by it. Then fix warnings top to bottom, aiming for zero.
+2. **Run it with real input.** Use `C-u C-c C-c` for arguments, and type into the buffer for input. If a sanitizer report appears, read its first line, then jump to `#0` with `M-g n`.
+3. **Before you call it done:**
+   - `C-c m c` (warnings that need optimization, plus the analyzer);
+   - `C-c m v` (values that were never set);
+   - `C-c m u` (output changes between `-O0` and `-O2`).
+4. **When you want to understand, not just fix:**
+   - `C-c m g` to step through it;
+   - `C-c m a` to read the machine code;
+   - `C-c m l` for memory layout;
+   - `C-c m t` for its conversation with the kernel.
+5. **When it's finished:** `C-c m r`.
+
+To install everything this uses on Fedora:
+
+```sh
+sudo dnf install valgrind gdb strace dwarves perf
+```

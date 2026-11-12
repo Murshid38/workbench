@@ -1,0 +1,46 @@
+Your debugger, ETW, error-reporting and printing milestones rely on parts of Windows that most debloat tools remove, so the attached `debloat-lab.ps1` removes only what none of them use. I checked that it parses and dry-ran it in PowerShell here, but I couldn't run it on Windows, so take a snapshot first.
+
+**1. Before you start**
+- **Take a VM snapshot.** It's your undo for everything below.
+- **Turn Secure Boot off** in the VM's firmware settings. Windows keeps booting without it. If you leave it on, W7's `bcdedit /set testsigning on` fails with "protected by Secure Boot policy".
+- **Check encryption with `manage-bde -status`.** If drive C: is encrypted, turn Device encryption off. Microsoft notes BitLocker can also block that `bcdedit` change.
+
+**2. Run the script**, from an Administrator `powershell.exe`, logged in as the account you work in. Use `-DryRun` first; it lists every change without making it. Then run it without `-DryRun` and reboot.
+- **It removes:** the inbox apps (Xbox, News, Widgets, Copilot, Teams, Outlook, Clipchamp and others), OneDrive, telemetry services and scheduled tasks, the search indexer (it would re-index every build output), Superfetch, hibernation, System Restore (snapshots replace it) and reserved storage.
+- **It sets:** web results off in Start, Edge doesn't run once closed, and Windows Update only notifies, so you snapshot before updating.
+- **It keeps, on purpose:**
+  - Windows Error Reporting, for W4's minidumps.
+  - Event Log, WMI and ETW, for the W7 ETW pane, WPR and WPA.
+  - The app-package system and winget, because WinDbg installs as a packaged app.
+  - The print spooler, for printing in W2.
+  - Windows Terminal, to compare against your own ConPTY terminal.
+  - Defender stays on, with exclusions for `C:\work` and `C:\tools`. Your debugger writing into other processes, and the W6 injection programs, would otherwise get flagged.
+
+**3. Three settings to change by hand after the reboot**
+- In `SystemPropertiesPerformance.exe`, choose "Adjust for best performance", then tick "Smooth edges of screen fonts" again. Without that tick, font smoothing is off for the whole system, and your W1 GDI glyphs won't look like real Windows text.
+- In Windows Security → Device security → Core isolation, turn Memory integrity off. Inside a VM it adds a second hypervisor layer for no benefit here.
+- If you haven't already, turn off Device encryption (step 1).
+
+**4. Install only these. No Visual Studio needed.**
+
+| Tool | How | Used for |
+| --- | --- | --- |
+| WinDbg | `winget install Microsoft.WinDbg` | Checking W3–W4, minidumps |
+| Sysinternals Suite | Unzip `download.sysinternals.com/files/SysinternalsSuite.zip` into `C:\tools\sysinternals`; nothing is installed | Process Monitor, VMMap, Process Explorer, DebugView |
+| Enterprise WDK (EWDK) | Mount the ISO, then run `LaunchBuildEnv.cmd` as Administrator. It has the compilers, linkers, headers and libraries, and installs nothing. | SEH labs and the W7 driver |
+| Windows Performance Analyzer | Windows ADK, with only the Windows Performance Toolkit selected (`wpr.exe` is already in Windows) | W7 tracing |
+| Your Workbench `.exe` files | Built on Linux with MinGW, copied in through a shared folder | Everything else |
+
+**5. Leave W7's kernel setup until you reach W7.** Take a separate snapshot first. Then:
+- Run `bcdedit /set testsigning on`.
+- Run `bcdedit /debug on`.
+- Run `bcdedit /dbgsettings net hostip:<debugger IP> port:50000`. It prints the key WinDbg will need.
+
+Kernel debugging needs WinDbg running on a *second* Windows machine, because WinDbg only runs on Windows. The simplest option is a clone of this VM on the same virtual network.
+
+If your on-premises Business Central setup is meant to share this VM, I'd give it its own VM instead. It needs IIS, SQL Server and .NET running all the time, while this one will sit in test-signing and kernel-debug mode with Defender exclusions.
+
+Sources:
+- [Using the Enterprise WDK (Microsoft Learn)](https://learn.microsoft.com/en-au/windows-hardware/drivers/develop/using-the-enterprise-wdk)
+- [Install the Windows debugger (Microsoft Learn)](https://learn.microsoft.com/windows-hardware/drivers/debugger/)
+- [The TESTSIGNING boot configuration option (Microsoft Learn)](https://learn.microsoft.com/windows-hardware/drivers/install/the-testsigning-boot-configuration-option)
